@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Japan — Live Earthquakes</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-sA+e2YkP0s3Wxv1vZf8p1bM6Qwbk+q3qk0pP4R9mQv0=" crossorigin="" />
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>Japan — Live Earthquakes</h1>
+      <div id="controls">
+        <label>Feed:
+          <select id="feed-select">
+            <option value="all_hour">Past hour (default)</option>
+            <option value="all_day">Past day</option>
+            <option value="all_week">Past 7 days</option>
+          </select>
+        </label>
+        <button id="refresh">Refresh now</button>
+        <span id="last-updated">—</span>
+      </div>
+    </header>
+
+    <main>
+      <div id="map"></div>
+    </main>
+
+    <footer>
+      Data source: <a href="https://earthquake.usgs.gov/" target="_blank" rel="noopener">USGS</a> — map auto-updates every 30s.
+    </footer>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-o9N1j7kXg1v6sKQ3Y6q0h6k8bQ1JpX1YhV0S0v+0Xc4=" crossorigin=""></script>
+  <script src="script.js"></script>
+</body>
+</html>
