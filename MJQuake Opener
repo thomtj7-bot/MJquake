@@ -1,0 +1,252 @@
+// Live Japan earthquake map behavior
+// Place at maps/japan-earthquakes/script.js
+
+(function () {
+  const MAP_BOUNDS = { minLon: 122, maxLon: 154, minLat: 24, maxLat: 46 };
+  const ACTIVE_WINDOW_MINUTES = 10; // quake within last N minutes considered "active"
+  const AUTO_REFRESH_MS = 30_000;
+
+  const feedUrls = {
+    all_hour: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson",
+    all_day: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson",
+    all_week: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_week.geojson"
+  };
+
+  const map = L.map("map", {
+    minZoom: 4,
+    maxZoom: 10
+  }).setView([37.5, 139.0], 5);
+
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  let quakeLayer = L.layerGroup().addTo(map);
+  let activeGroup = L.layerGroup().addTo(map);
+  let autoTimer = null;
+
+  const feedSelect = document.getElementById("feed-select");
+  const refreshBtn = document.getElementById("refresh");
+  const lastUpdated = document.getElementById("last-updated");
+  const detailsEl = document.getElementById("quake-details");
+
+  refreshBtn.addEventListener("click", fetchAndRender);
+  feedSelect.addEventListener("change", () => {
+    fetchAndRender();
+  });
+
+  function insideJapan([lat, lon]) {
+    return lon >= MAP_BOUNDS.minLon && lon <= MAP_BOUNDS.maxLon &&
+           lat >= MAP_BOUNDS.minLat && lat <= MAP_BOUNDS.maxLat;
+  }
+
+  function magToRadiusMeters(mag) {
+    // Simple visual radius: exponential so bigger mags display much larger circles.
+    // Tweak multiplier to taste for your map zoom.
+    if (mag <= 0) return 1000;
+    return Math.pow(2, mag) * 500; // rough, in meters
+  }
+
+  function depthToColor(depth) {
+    if (depth == null || isNaN(depth)) return "#999";
+    if (depth < 10) return "#ff0000";
+    if (depth < 50) return "#ff8c00";
+    if (depth < 100) return "#ffd700";
+    return "#1e90ff";
+  }
+
+  function magToRoman(mag) {
+    // Simple grouping — adjust as you prefer. Returns I..V
+    if (mag < 2.0) return "I";
+    if (mag < 4.0) return "II";
+    if (mag < 5.5) return "III";
+    if (mag < 7.0) return "IV";
+    return "V";
+  }
+
+  function formatTime(ms) {
+    const d = new Date(ms);
+    return d.toLocaleString();
+  }
+
+  function createXIcon(size = 26, color = "#c00") {
+    // SVG X as HTML for a DivIcon
+    const svg = `
+      <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
+        <line x1="3" y1="3" x2="${size-3}" y2="${size-3}" stroke="${color}" stroke-width="3" stroke-linecap="round"/>
+        <line x1="${size-3}" y1="3" x2="3" y2="${size-3}" stroke="${color}" stroke-width="3" stroke-linecap="round"/>
+      </svg>
+    `;
+    return L.divIcon({
+      className: "quake-x-icon",
+      html: svg,
+      iconSize: [size, size],
+      iconAnchor: [size/2, size/2]
+    });
+  }
+
+  function updateSidebar(feature) {
+    if (!feature) {
+      detailsEl.innerHTML = "<p>No earthquake selected.</p>";
+      return;
+    }
+    const props = feature.properties || {};
+    const mag = props.mag != null ? props.mag.toFixed(1) : "n/a";
+    const roman = magToRoman(props.mag || 0);
+    const place = props.place || "Unknown location";
+    const time = props.time ? formatTime(props.time) : "Unknown time";
+    const url = props.url || "#";
+
+    detailsEl.innerHTML = `
+      <div class="details-card">
+        <h3>Magnitude: <span class="mag-num">${mag}</span></h3>
+        <p class="mag-roman">Level: <strong>${roman}</strong></p>
+        <p>${place}</p>
+        <p><small>${time}</small></p>
+        <p><a href="${url}" target="_blank" rel="noopener">View on USGS</a></p>
+      </div>
+    `;
+  }
+
+  function clearLayers() {
+    quakeLayer.clearLayers();
+    activeGroup.clearLayers();
+  }
+
+  function fetchAndRender() {
+    const feed = feedSelect.value || "all_hour";
+    const url = feedUrls[feed];
+
+    fetch(url)
+      .then(r => r.json())
+      .then(data => {
+        const features = (data.features || []).filter(f => {
+          if (!f.geometry || !f.geometry.coordinates) return false;
+          const [lon, lat] = f.geometry.coordinates;
+          return insideJapan([lat, lon]);
+        });
+
+        clearLayers();
+
+        if (!features.length) {
+          lastUpdated.textContent = `No quakes in selection — ${new Date().toLocaleTimeString()}`;
+          updateSidebar(null);
+          return;
+        }
+
+        // sort by time descending to find most recent
+        features.sort((a, b) => (b.properties.time || 0) - (a.properties.time || 0));
+        const latest = features[0];
+
+        // render all quakes
+        features.forEach((f) => {
+          const [lon, lat, depth] = f.geometry.coordinates;
+          const mag = f.properties.mag || 0;
+
+          const circle = L.circle([lat, lon], {
+            radius: magToRadiusMeters(mag),
+            color: depthToColor(depth),
+            weight: 1,
+            fillColor: depthToColor(depth),
+            fillOpacity: 0.25
+          });
+
+          const circleMarker = L.circleMarker([lat, lon], {
+            radius: Math.max(4, mag * 2),
+            color: "#222",
+            weight: 1,
+            fillColor: "#fff",
+            fillOpacity: 1
+          });
+
+          const popupHtml = `
+            <div>
+              <strong>Mag ${mag.toFixed(1)}</strong> — ${f.properties.place || ""}
+              <div><small>${formatTime(f.properties.time)}</small></div>
+              <div><a href="${f.properties.url}" target="_blank" rel="noopener">USGS details</a></div>
+            </div>
+          `;
+
+          circle.on("click", () => updateSidebar(f));
+          circleMarker.on("click", () => updateSidebar(f));
+
+          circle.addTo(quakeLayer);
+          circleMarker.addTo(quakeLayer);
+
+          // small label with magnitude as a tooltip on hover
+          circleMarker.bindTooltip(`M ${mag.toFixed(1)}`, { direction: "top" });
+        });
+
+        // decide if latest quake is "active" based on time
+        const now = Date.now();
+        const ageMinutes = (now - (latest.properties.time || 0)) / 60000;
+        if (ageMinutes <= ACTIVE_WINDOW_MINUTES) {
+          const [lon, lat, depth] = latest.geometry.coordinates;
+          const mag = latest.properties.mag || 0;
+
+          // X icon marker
+          const xMarker = L.marker([lat, lon], { icon: createXIcon(28, "#b30000"), zIndexOffset: 1000 });
+          xMarker.addTo(activeGroup);
+
+          // inner and outer circle
+          const innerR = magToRadiusMeters(mag);
+          const outerR = innerR * 2;
+
+          const inner = L.circle([lat, lon], {
+            radius: innerR,
+            color: "#b30000",
+            weight: 2,
+            fill: false,
+            dashArray: "4 4"
+          }).addTo(activeGroup);
+
+          const outer = L.circle([lat, lon], {
+            radius: outerR,
+            color: "#b30000",
+            weight: 1,
+            opacity: 0.6,
+            fill: false
+          }).addTo(activeGroup);
+
+          // flash animation (optional): pulse a temporary circle then remove
+          const pulse = L.circle([lat, lon], {
+            radius: innerR / 1.5,
+            color: "#ff6666",
+            weight: 0,
+            fillColor: "#ff6666",
+            fillOpacity: 0.12
+          }).addTo(activeGroup);
+
+          // click behaviour for active cluster
+          [xMarker, inner, outer, pulse].forEach(layer => {
+            layer.on("click", () => updateSidebar(latest));
+          });
+
+          updateSidebar(latest);
+
+          // pan/zoom a little to visible area but avoid forcing user every refresh
+          // only pan if latest is not in current view
+          if (!map.getBounds().contains([lat, lon])) {
+            map.panTo([lat, lon]);
+          }
+        } else {
+          // no active quake in the threshold window; clear sidebar or show latest as last event
+          updateSidebar(latest);
+        }
+
+        lastUpdated.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+      })
+      .catch(err => {
+        console.error("Failed to fetch quake feed", err);
+        lastUpdated.textContent = `Error updating: ${err.message || err}`;
+      });
+  }
+
+  // start initial fetch and enable auto-refresh
+  fetchAndRender();
+  autoTimer = setInterval(fetchAndRender, AUTO_REFRESH_MS);
+
+  // expose for console debugging (optional)
+  window.__quakeMap = { fetchAndRender, clear: clearLayers, map };
+
+})();
